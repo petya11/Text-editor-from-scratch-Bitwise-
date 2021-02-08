@@ -8,8 +8,8 @@ ID2D1Factory* d2d_factory;
 IDWriteFactory* dwrite_factory;
 ID2D1HwndRenderTarget* render_target;
 IDWriteTextFormat* text_format;
-ID2D1SolidColorBrush* text_brush;
-
+//ID2D1SolidColorBrush* text_brush;
+ID2D1Brush *text_brush;
 WCHAR text[] = L"Foo bar baz fdsfsdfsdfsddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
 typedef uint32_t BufferPosition;
@@ -24,7 +24,7 @@ struct Buffer {
 
 void DebugWriteBuffer(Buffer* buffer) {
 	char temp[1024];
-	CopyMemory(temp, buffer->data, buffer->gap_start_position)
+	CopyMemory(temp, buffer->data, buffer->gap_start_position);
 		temp[buffer->gap_start_position] = 0;
 	OutputDebugStringA(temp);
 }
@@ -48,7 +48,7 @@ LRESULT CALLBACK QedWindowProc(HWND window, UINT message_type, WPARAM wparam, LP
 		hresult = d2d_factory->CreateHwndRenderTarget(D2D1::RenderTargetProperties(), D2D1::HwndRenderTargetProperties(window, window_size), &render_target);
 		if (text_brush) { text_brush->Release(); }
 
-		hresult = render_target->CreateSolidColorBrush(D2D1::color(D2D1::ColorF::Black), brush_properties, &text_brush);
+		hresult = render_target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black), &text_brush);
 		break;
 	}
 	case WM_PAINT: {
@@ -60,9 +60,8 @@ LRESULT CALLBACK QedWindowProc(HWND window, UINT message_type, WPARAM wparam, LP
 		layout_rectangle.left = (FLOAT)client_rectangle.left;
 		layout_rectangle.right = (FLOAT)client_rectangle.right;
 		layout_rectangle.top = (FLOAT)client_rectangle.top;
-		layout_rectangle.botton = (FLOAT)client_rectangle.botton;
-		layout_rectangle, text_brush
-		render_target->DrawText(text, wcslen(text), client_rectangle, text_format);
+		layout_rectangle.bottom = (FLOAT)client_rectangle.bottom;
+		render_target->DrawText(text, wcslen(text), text_format, layout_rectangle, text_brush);
 		hresult = render_target->EndDraw();
 		ValidateRect(window, 0);
 		break;
@@ -99,4 +98,3 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
 	}
 	return 0;
 }
-
