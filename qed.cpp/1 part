@@ -1,0 +1,215 @@
+#include "pch.h"
+
+
+#pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "d2d1.lib")
+
+ID2D1Factory* d2d_factory;
+IDWriteFactory* dwrite_factory;
+ID2D1HwndRenderTarget* render_target;
+IDWriteTextFormat* text_format;
+ID2D1SolidColorBrush *text_brush;
+//ID2D1Brush *text_brush;
+WCHAR text[] = L"Foo bar baz fdsfsdfsdfsdddddddd \n ddddddddddddddddddddddd \n ddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+
+typedef uint32_t BufferPosition;
+
+struct Buffer {
+	char *name;
+	char *data;
+	BufferPosition gap_start_position;
+	BufferPosition gap_end_position;
+	BufferPosition end_position;
+};
+
+void InitializeBuffer(Buffer *buffer, int initial_gap_size) {
+	buffer->data = (char*)HeapAlloc(GetProcessHeap(), 0, initial_gap_size);
+	buffer->gap_start_position = 0;
+	buffer->gap_end_position = initial_gap_size;
+	buffer->end_position = initial_gap_size;
+}
+
+BufferPosition MoveBufferPositionForward(Buffer *buffer, BufferPosition position) {
+	assert(position != buffer->end_position);
+	position++;
+	if (position == buffer->gap_start_position) {
+		position = buffer->gap_end_position;
+	}
+	return position;
+}
+
+void ShiftGapToPosition(Buffer* buffer, BufferPosition position) {
+	uint32_t gap_size = buffer->gap_end_position - buffer->gap_start_position;
+	if (position < buffer->gap_start_position) {
+		uint32_t gap_delta = buffer->gap_start_position - position;
+		buffer->gap_start_position -= gap_delta;
+		buffer->gap_end_position -= gap_delta;
+		MoveMemory(buffer->data + buffer->gap_end_position, buffer->data + buffer->gap_start_position, gap_delta);
+	}else if (position > buffer->gap_start_position) {
+		uint32_t gap_delta = position - buffer->gap_start_position;
+		MoveMemory(buffer->data + buffer->gap_start_position, buffer->data + buffer->gap_end_position, gap_delta);
+		buffer->gap_start_position += gap_delta;
+		buffer->gap_end_position += gap_delta;
+	}
+}
+
+void EnsureGapSize(Buffer *buffer, uint32_t minimum_gap_size){
+	uint32_t gap_size = buffer->gap_end_position - buffer->gap_start_position;
+	if (gap_size < minimum_gap_size) {
+		ShiftGapToPosition(buffer, buffer->end_position - gap_size);
+		uint32_t new_end_position = 2 * buffer->end_position;
+		buffer->data = (char *)HeapReAlloc(GetProcessHeap(), 0, buffer->data, new_end_position);
+		buffer->gap_end_position = new_end_position;
+		buffer->end_position = new_end_position;
+	}
+}
+
+void InsertCharacter(Buffer * buffer, BufferPosition position, char character) {
+	EnsureGapSize(buffer, 1);
+	ShiftGapToPosition(buffer, position);
+	buffer->data[buffer->gap_start_position] = character;
+	buffer->gap_start_position++;
+}
+
+BufferPosition CopyLineFromBuffer(char* destination, int destination_size, Buffer *buffer, BufferPosition buffer_position) {
+	if (buffer_position == buffer->gap_start_position) {
+		buffer_position = buffer->gap_end_position;
+	}
+	for (int i = 0; i < destination_size && buffer_position < buffer->gap_end_position; i++) {
+		char character = buffer->data[buffer_position];
+		if (character == '\n') {
+			break;
+		}
+		*destination++ = character;
+		buffer_position = MoveBufferPositionForward(buffer, buffer_position);
+	}
+	return buffer_position;
+}
+void DrawBuffer(Buffer* buffer, float line_height, float x, float y, float width, float height) {
+	char utf8_line[256];
+	WCHAR utf16_line[256];
+
+	D2D1_RECT_F layout_rectangle;
+	layout_rectangle.left = x;
+	layout_rectangle.right = x + width;
+	layout_rectangle.top = y;
+	layout_rectangle.bottom = y + line_height;
+
+	BufferPosition buffer_position = 0;
+	for (;;) {
+		ZeroMemory(utf8_line, sizeof(utf8_line));
+		buffer_position = CopyLineFromBuffer(utf8_line, sizeof(utf8_line) - 1, buffer, buffer_position);
+		MultiByteToWideChar(CP_UTF8, 0, utf8_line, sizeof(utf8_line), utf16_line, sizeof(utf16_line) / sizeof(*utf16_line));
+
+		render_target->DrawText(utf16_line, wcslen(utf16_line), text_format, layout_rectangle, text_brush);
+
+		layout_rectangle.top += line_height;
+		layout_rectangle.bottom += line_height;
+
+		if (buffer_position == buffer->end_position) {
+			break;
+		}
+		buffer_position = MoveBufferPositionForward(buffer, buffer_position);
+	}
+}
+
+void OutputDebugBuffer(Buffer *buffer) {
+	char temp[1024];
+	CopyMemory(temp, buffer->data, buffer->gap_start_position);
+	temp[buffer->gap_start_position] = 0;
+	OutputDebugStringA(temp);
+	CopyMemory(temp, buffer->data + buffer->gap_end_position, buffer->end_position - buffer->gap_end_position);
+	temp[buffer->end_position - buffer->gap_end_position] = 0;
+	OutputDebugStringA(temp);
+}
+
+Buffer *current_buffer;
+
+void RenderWindow(HWND window) {
+	RECT client_rectangle;
+	GetClientRect(window, &client_rectangle);
+	render_target->BeginDraw();
+	render_target->Clear(D2D1::ColorF(D2D1::ColorF::Red));
+	DrawBuffer(current_buffer, 36.0f, (FLOAT)client_rectangle.left, (FLOAT)client_rectangle.top,
+		(FLOAT)(client_rectangle.right - client_rectangle.left), (FLOAT)(client_rectangle.bottom - client_rectangle.top));
+	render_target->EndDraw();
+	ValidateRect(window, 0);
+}
+
+LRESULT CALLBACK QedWindowProc(HWND window, UINT message_type, WPARAM wparam, LPARAM lparam) {
+	LRESULT result = 0;
+	HRESULT hresult = 0;
+	switch (message_type) {
+	case WM_DESTROY:
+		PostQuitMessage(0);
+		break;
+	case WM_SIZE: {
+		if (render_target) {
+			render_target->Release();
+		}
+		RECT client_rectangle;
+		GetClientRect(window, &client_rectangle);
+		D2D1_SIZE_U window_size;
+		window_size.width = client_rectangle.right - client_rectangle.left;
+		window_size.height = client_rectangle.bottom - client_rectangle.top;
+		hresult = d2d_factory->CreateHwndRenderTarget(D2D1::RenderTargetProperties(), 
+			D2D1::HwndRenderTargetProperties(window, window_size), &render_target);
+		if (text_brush) { text_brush->Release(); }
+		hresult = render_target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black), &text_brush);
+		break;
+	}
+	case WM_CHAR:
+		char character;
+		WideCharToMultiByte(CP_UTF8, 0, (WCHAR*)&wparam, 1, &character, 1, 0, 0);
+		InsertCharacter(current_buffer, 0, character);
+		RenderWindow(window);
+		break;
+	case WM_PAINT: {
+		RenderWindow(window);
+		
+		break;
+	}
+	default:
+		result = DefWindowProcA(window, message_type, wparam, lparam);
+		break;
+	}
+	return result;
+}
+
+
+int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
+	Buffer buffer_data;
+	current_buffer = &buffer_data;
+	InitializeBuffer(current_buffer, 2);
+	const char buffer_text[] = "Hello\nworld!\nFoo bar baz";
+	for (int i = 0; i < sizeof(buffer_text); i++) {
+		InsertCharacter(current_buffer, i, buffer_text[i]);
+	}
+
+	
+
+	HRESULT hresult;
+	hresult = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2d_factory);
+	hresult = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&dwrite_factory);
+	
+	hresult = dwrite_factory->CreateTextFormat(L"Consolas", 0, DWRITE_FONT_WEIGHT_REGULAR, 
+		DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 36.0f, L"en-us", &text_format);
+	text_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+	WNDCLASSA window_class = { 0 };
+	window_class.style = CS_HREDRAW | CS_VREDRAW;
+	window_class.hInstance = instance;
+	window_class.lpfnWndProc = QedWindowProc;
+	window_class.lpszClassName = "qed";
+	RegisterClassA(&window_class);
+
+	HWND window = CreateWindowA("qed", "QED", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
+		CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, instance, 0);
+
+	MSG message;
+	while (GetMessage(&message, 0, 0, 0)) {
+		TranslateMessage(&message);
+		DispatchMessage(&message);
+	}
+	return 0;
+}
