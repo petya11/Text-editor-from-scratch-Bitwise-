@@ -1,5 +1,8 @@
-#include "pch.h"
-
+#include "windows.h"
+#include "d2d1.h"
+#include "dwrite.h"
+#include "stdint.h"
+#include "assert.h"
 
 #pragma comment(lib, "dwrite.lib")
 #pragma comment(lib, "d2d1.lib")
